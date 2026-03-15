@@ -1,0 +1,206 @@
+---
+title: "Zika Virus Mutation Analysis"
+author: "Víctor Noguera, José Ramos, Ian Rodríguez"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+# Part A: Dataset Description
+
+According to the study:
+
+> "This table lists observed nonsynonymous SNPs across the data used for SNP analysis. It includes frequency and count of ancestral and derived alleles at each position, as well as amino acid changes caused by each SNP."
+
+## Where and why was the information collected?
+The data was gathered from multiple regions across the Americas where Zika virus was actively spreading, including clinical samples from infected patients and environmental samples from mosquitoes in Florida (USA), Brazil, Dominican Republic, Honduras, and Puerto Rico.
+
+Tracking mutations across sequenced ZIKV genomes enables researchers to:
+- Identify transmission routes
+- Estimate introduction timings in different regions
+- Monitor viral evolution during spread
+- Evaluate mutation impact on virulence and severity
+- Understand transmission dynamics
+
+## Meaning of each variable
+- **Position (KX197192.1):** Specific nucleotide coordinate on the reference genome.
+- **Ancestral Allele:** Original nucleotide prior to mutation.
+- **Derived Allele:** Mutated nucleotide.
+- **Ancestral Frequency:** Proportion of genomes carrying the ancestral allele.
+- **Derived Frequency:** Proportion carrying the derived allele.
+- **Minor Allele Count:** Count of the less frequent allele.
+- **Total Alleles:** Number of sequences covering that position.
+- **Codon Position:** Codon index within the protein ORF.
+- **Degeneracy:** Measures how many nucleotide changes do not alter the amino acid.
+- **Codon Change:** Triplet transformation (e.g., TTC → CTC).
+- **Amino Acid Change:** Protein-level change (e.g., F → L).
+- **Protein:** Viral protein affected (e.g., Capsid, NS1, NS5).
+
+The dataset originally appeared in wide Excel format. After loading it using `readxl` and restructuring with `pivot_longer()`, the variables became interpretable.
+
+---
+
+```{r, message=FALSE}
+library(readxl)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+col_names <- c("Position", "Allele_Ancestral", "Allele_Derived", 
+               "Freq_Ancestral", "Freq_Derived", "Minor_Count", 
+               "Total_Count", "Codon_Pos", "Degeneracy", 
+               "Codon_Change", "AA_Change", "Protein")
+
+url <- "https://static-content.springer.com/esm/art%3A10.1038%2Fnature22402/MediaObjects/41586_2017_BFnature22402_MOESM3_ESM.xlsx"
+destfile <- "zika_data.xlsx"
+curl::curl_download(url, destfile)
+
+df_wide <- read_excel(destfile,
+                      skip = 2, 
+                      col_names = col_names)
+
+df_long <- df_wide %>%
+  pivot_longer(
+    cols = c(Allele_Ancestral, Allele_Derived, Freq_Ancestral, Freq_Derived),
+    names_to = c(".value", "Status"),
+    names_sep = "_"
+  )
+
+df_long <- df_long %>%
+  mutate(
+    Position = as.numeric(Position),
+    Freq = as.numeric(Freq),
+    Minor_Count = as.integer(Minor_Count),
+    Total_Count = as.integer(Total_Count),
+    Status = as.factor(Status),
+    Protein = as.factor(trimws(Protein))
+  )
+
+my_colors <- c(
+  "#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00", 
+  "#FFFF33", "#A65628", "#F781BF", "#999999", "#66C2A5", 
+  "#FC8D62", "#8DA0CB"
+)
+
+df_derived <- df_long[df_long$Status == "Derived", ]
+
+proteins_over_threshold <- unique(df_long$Protein[df_long$Status == "Derived" & df_long$Freq >= 0.05])
+
+df_selected <- df_long[df_long$Protein %in% proteins_over_threshold & df_long$Status == "Derived", ]
+
+```
+
+
+# Part B: Discrete vs Continuous Variables
+
+## Plot: Violin + Jitter
+
+### Hypothesis
+Some proteins may accumulate higher numbers of functional or viable mutations.
+
+### Null Hypothesis
+All proteins have uniformly distributed amounts of functional or viable mutations.
+
+This plot combines a boxplot-like violin distribution with a jitter (a scatterplot with slight random horizontal displacement to avoid overlap). It visualizes the distribution of derived allele frequencies for proteins that contain at least one derived allele with frequency ≥ 0.05.
+
+A 0.05 threshold indicates alleles present in at least 5% of genomes, suggesting they may be viable or functional. Mutations below this threshold are treated as likely deleterious. Although no statistical justification for this cutoff is provided, addressing this concern is beyond the scope of this project.
+
+From the visualization, proteins NS1 and NS5 show higher counts of high-frequency viable alleles. However, NS5 also contains the largest number of documented mutations overall, increasing the chance of observing high-frequency variants.
+
+```{r}
+ggplot(df_selected, aes(Protein, Freq, fill = Protein, color = Protein, shape = Protein)) + 
+  geom_violin(alpha = 0.5) +
+  geom_jitter(alpha = 0.5, width = 0.2) + 
+  scale_color_manual(values = my_colors) +
+  scale_fill_manual(values = my_colors) +
+  annotate("text", x=0.7, y = 0.06, label = "Threshold = 0.05", color = "red", size=2.5) +
+  ylab("Frequency normalized log10(derived allele count / total count)") +
+  labs(title="Violin and jitter of all data in proteins with derived alleles with frequency >= 0.05") +
+  geom_hline(yintercept = 0.05, color="red", linetype = "dashed") +
+  scale_y_log10() +
+  theme(legend.position="none") +
+  theme_minimal() +
+  guides(fill = "none", color = "none", shape = "none")
+```
+
+---
+
+# Plot 1: Scatter Plot
+### Hypothesis
+Some genomic positions show higher derived allele frequencies because those mutations are under positive or neutral selection.
+
+### Null Hypothesis
+Derived allele frequencies are uniformly distributed across genomic positions.
+
+This scatterplot displays derived allele frequency (y-axis) against genomic position (x-axis), color-coded by protein. A frequency threshold ≥ 0.05 identifies potentially viable mutations. A log10 y-scale improves visualization of low-frequency values.
+
+```{r}
+ggplot(data=df_derived, mapping = aes(Position, Freq, color = Protein)) + 
+  geom_point(alpha=0.75) +
+  geom_hline(yintercept = 0.05, linetype="dashed", color="red") +
+  annotate("text", x = 5000, y = 0.10, label = "Threshold: 0.05", color = "red") +
+  xlab("Genomic position") +
+  ylab("Frequency normalized log10(derived allele count / total count)") +
+  scale_y_log10() +
+  theme_minimal() +
+  scale_color_manual(values = my_colors) +
+  labs(title="Zika mutation frequencies across the genome")
+
+```
+
+---
+
+# Plot 2: Histogram
+### Hypothesis
+It is possible that the vast majority of genomic variations identified during the outbreak remain at very low frequencies within the population. This would suggest that most mutations are relatively recent or don't really help the virus to function well, and only a small fraction of variants are expected to reach higher frequencies through positive selection or genetic drift as the virus adapts to its host.
+
+### Null Hypothesis
+The allelic frequencies are uniformly distributed across the population, suggesting that all identified mutations have an equal probability of reaching high frequencies and that there is no significant impact from natural selection or genetic drift on the viral population structure.
+
+### Interpretation
+This histogram illustrates the frequency distribution of all identified mutations. We applied a log10 scale to the x-axis because the data is heavily skewed toward the left. The color gradient from red to green highlights the transition from rare to common alleles. The results show a strong accumulation of mutations with frequencies below 0.01, which allows us to reject the null hypothesis. This pattern indicates that the Zika outbreak was dominated by rare variants that failed to become common in the population. The few bars that cross the 0.05 dashed line represent the successful mutations that managed to persist and likely played a role in the virus's geographic evolution.
+
+
+```{r}
+ggplot(df_derived, aes(x = Freq)) +
+  geom_histogram(bins = 30, aes(fill = after_stat(x))) +
+  scale_x_log10() +
+  scale_fill_gradientn(colors = c("red", "yellow" ,"green"),
+                       values = scales::rescale(c(0, 0.05, 1)),
+                        ) +
+  annotate("text", x=0.1, y = 40, label = "Threshold = 0.05", color = "#4DAF4A") +
+  geom_vline(xintercept = 0.05, color = "#4DAF4A", linetype="dashed") +
+  theme_classic() + 
+  labs(
+    title = "Distribution of Allelic Frequencies",
+    x = "Allele Frequency (log10 scale)",
+    y = "Count of Variants"
+  ) +
+  guides(fill="none")
+```
+
+---
+
+# Plot 3: Barplot
+### Hypothesis
+The mutational load of the Zika virus is not distributed uniformly across its genome. Instead, we expect to see a higher concentration of variants in proteins that are either very large or under some kind of evolutionary pressure (for example NS5). At the same time, we believe that essential structural proteins will show high levels of conservation, reflected by a significantly lower number of mutations.
+
+### Null Hypothesis
+The distribution of mutations across the Zika virus genome is uniform. Under this assumption, all Zika virus proteins are expected to exhibit the same amount of mutation regardless of their biological function. 
+
+This barplot quantifies the total number of unique mutations identified in each protein in Zika virus, revealing a distribution that is not uniformly distributed. The NS5 protein shows the highest variation with nearly 60 mutations, suggesting that it is a primary site for genetic evolution. Although this high count is partly due to NS5 being the largest mutated protein in the genome, the protein with more viable mutations, this could happen because of its biggest amount of general mutations (random chance). The Envelope protein also shows high variability, maybe because of the need to evade the host’s immune system. Proteins like the Membrane protein and 2k show very few mutations, indicating that they need to be conserved because changes in these proteins are likely lethal to the virus.
+
+```{r}
+
+ggplot(df_derived, aes(x = Protein, fill = Protein)) +
+  geom_bar() +
+  theme_minimal() +
+  scale_fill_manual(values = my_colors) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Number of Mutations Identified per Protein",
+       subtitle = "Discrete variable analysis",
+       x = "Viral Protein",
+       y = "Number of Observations")
+
+```
